@@ -1,0 +1,6 @@
+# Override defaults here
+max_cyclomatic_complexity: 12
+enforce_trailing_newline: true
+fail_on_secrets: true
+require_tests_for_code: true
+require_docs_for_public_api: true
