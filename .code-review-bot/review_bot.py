@@ -22,6 +22,8 @@ from typing import Dict, List, Tuple
 
 import pathlib
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 
 # Ensure the checks package (sibling folder) is importable when executed as a script
@@ -81,18 +83,58 @@ def _headers() -> Dict[str, str]:
     }
 
 
+_session: requests.Session | None = None
+
+
+def _get_session() -> requests.Session:
+    global _session
+    if _session is None:
+        s = requests.Session()
+        retry = Retry(
+            total=5,
+            connect=5,
+            read=5,
+            backoff_factor=0.5,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET", "POST"],
+            respect_retry_after_header=True,
+        )
+        adapter = HTTPAdapter(max_retries=retry)
+        s.mount("https://", adapter)
+        s.mount("http://", adapter)
+        _session = s
+    return _session
+
+
 def gh_get(path: str, params: Dict | None = None) -> Dict:
     url = f"{GITHUB_API}{path}"
-    r = requests.get(url, headers=_headers(), params=params)
+    s = _get_session()
+    r = s.get(url, headers=_headers(), params=params, timeout=(5, 20))
     r.raise_for_status()
     return r.json()
 
 
 def gh_post(path: str, data: Dict) -> Dict:
     url = f"{GITHUB_API}{path}"
-    r = requests.post(url, headers=_headers(), json=data)
-    r.raise_for_status()
-    return r.json()
+    s = _get_session()
+    # A small manual retry loop for rare chunked encoding errors
+    last_exc: Exception | None = None
+    for attempt in range(5):
+        try:
+            r = s.post(url, headers=_headers(), json=data, timeout=(5, 30))
+            r.raise_for_status()
+            return r.json()
+        except (requests.exceptions.ChunkedEncodingError, requests.exceptions.ProtocolError) as e:
+            last_exc = e
+            # exponential backoff
+            import time
+
+            time.sleep(min(2 ** attempt * 0.5, 5.0))
+            continue
+    # If we exhausted retries, raise the last exception or a generic HTTP error
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("Unknown error posting to GitHub API")
 
 
 def list_changed_files(pr_number: int) -> List[Dict]:
