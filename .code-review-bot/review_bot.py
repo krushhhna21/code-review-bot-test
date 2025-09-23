@@ -24,6 +24,7 @@ import pathlib
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from urllib3.exceptions import ProtocolError
 
 
 # Ensure the checks package (sibling folder) is importable when executed as a script
@@ -124,7 +125,7 @@ def gh_post(path: str, data: Dict) -> Dict:
             r = s.post(url, headers=_headers(), json=data, timeout=(5, 30))
             r.raise_for_status()
             return r.json()
-        except (requests.exceptions.ChunkedEncodingError, requests.exceptions.ProtocolError) as e:
+        except (requests.exceptions.ChunkedEncodingError, ProtocolError) as e:
             last_exc = e
             # exponential backoff
             import time
@@ -258,8 +259,24 @@ def main():
         outcome = "APPROVE"
         summary = [":white_check_mark: No issues found by automated checks."]
 
-    resp = create_review(int(PR_NUMBER), comments, summary, outcome)
-    print(json.dumps({"created_review": resp.get("id"), "state": outcome}, indent=2))
+    try:
+        resp = create_review(int(PR_NUMBER), comments, summary, outcome)
+        print(json.dumps({"created_review": resp.get("id"), "state": outcome}, indent=2))
+    except Exception as e:
+        # Fallback: if review posting fails (e.g., transient chunked errors), post a plain comment
+        print(f"Warning: create_review failed, falling back to issue comment: {e}")
+        condensed = []
+        for c in comments[:50]:
+            condensed.append(f"- {c.path}:{max(c.line,1)} — {c.body}")
+        body = []
+        body.extend(summary)
+        if condensed:
+            body.append("")
+            body.append("Findings:")
+            body.extend(condensed)
+        payload = {"body": "\n".join(body) or "Automated review by Code Review Bot (fallback)."}
+        alt = gh_post(f"/repos/{REPO}/issues/{PR_NUMBER}/comments", payload)
+        print(json.dumps({"fallback_comment_id": alt.get("id"), "state": outcome}, indent=2))
 
 
 if __name__ == "__main__":
