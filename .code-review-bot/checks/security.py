@@ -1,8 +1,7 @@
 from typing import List
 import re
 
-
-from review_bot import Comment
+from model import Comment
 
 
 SECRET_PATTERNS = [
@@ -12,17 +11,19 @@ SECRET_PATTERNS = [
 (r"(?i)BEGIN RSA PRIVATE KEY", "Private key block"),
 ]
 
-
-
-
 def check_secrets(filename: str, content: str, cfg) -> List[Comment]:
-comments: List[Comment] = []
-fail_on = cfg.get("fail_on_secrets", True)
+	comments: List[Comment] = []
+	fail_on = cfg.get("fail_on_secrets", True)
 
-
-for pat, label in SECRET_PATTERNS:
-for i, line in enumerate(content.splitlines(), start=1):
-if re.search(pat, line):
-tag = "[BLOCK] " if fail_on else ""
-comments.append(Comment(filename, f"{tag}{label} detected. Remove secrets from source and rotate if real.", i))
-return comments
+	for pat, label in SECRET_PATTERNS:
+		for i, line in enumerate(content.splitlines(), start=1):
+			if re.search(pat, line):
+				tag = "[BLOCK] " if fail_on else ""
+				comments.append(
+					Comment(
+						filename,
+						f"{tag}{label} detected. Remove secrets from source and rotate if real.",
+						i,
+					)
+				)
+	return comments
