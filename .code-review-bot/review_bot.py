@@ -1,3 +1,92 @@
+#!/usr/bin/env python3
+"""
+Code Review Bot - Automated PR review tool for GitHub Actions
+"""
+import os
+import json
+import yaml
+from typing import List, Dict, Tuple
+from dataclasses import dataclass
+
+import requests
+
+# --- Environment variables -----------------------------------------------------
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+REPO = os.getenv("GITHUB_REPOSITORY")  # format: owner/repo
+PR_NUMBER = os.getenv("PR_NUMBER")
+
+
+# --- Comment data structure ---------------------------------------------------
+@dataclass
+class Comment:
+    """Represents a review comment on a specific line of a file."""
+    filename: str
+    body: str
+    line: int
+
+    def to_review_comment(self, commit_id: str) -> dict:
+        """Convert to GitHub API review comment format."""
+        return {
+            "path": self.filename,
+            "body": self.body,
+            "line": self.line,
+            "side": "RIGHT",
+        }
+
+
+# --- GitHub API helpers --------------------------------------------------------
+def gh_get(endpoint: str) -> dict:
+    """Make a GET request to GitHub API."""
+    url = f"https://api.github.com{endpoint}"
+    headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+    resp = requests.get(url, headers=headers)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def gh_post(endpoint: str, data: dict) -> dict:
+    """Make a POST request to GitHub API."""
+    url = f"https://api.github.com{endpoint}"
+    headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+    resp = requests.post(url, headers=headers, json=data)
+    resp.raise_for_status()
+    return resp.json()
+
+
+# --- Configuration loader ------------------------------------------------------
+def load_config() -> dict:
+    """Load configuration from config.yaml."""
+    config_path = os.path.join(os.path.dirname(__file__), "config.yaml")
+    if os.path.exists(config_path):
+        with open(config_path, "r") as f:
+            return yaml.safe_load(f) or {}
+    return {}
+
+
+# --- PR file listing -----------------------------------------------------------
+def list_changed_files(pr_number: int) -> List[Dict]:
+    """Get list of files changed in a PR."""
+    files = gh_get(f"/repos/{REPO}/pulls/{pr_number}/files")
+    return files
+
+
+def get_file_contents(sha: str) -> str:
+    """Get file contents by blob SHA."""
+    blob = gh_get(f"/repos/{REPO}/git/blobs/{sha}")
+    # GitHub returns base64 encoded content
+    import base64
+    if blob.get("encoding") == "base64":
+        return base64.b64decode(blob["content"]).decode("utf-8", errors="replace")
+    return blob.get("content", "")
+
+
+# --- Review execution ----------------------------------------------------------
 def run_checks(changed: List[Dict], cfg: Dict) -> Tuple[List[Comment], List[str]]:
     comments: List[Comment] = []
     summary: List[str] = []
